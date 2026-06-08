@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsLineItem, QGraphicsEllipseItem,
     QGraphicsTextItem, QGraphicsItemGroup, QGraphicsRectItem, QGraphicsPolygonItem,
-    QGraphicsPathItem,
+    QGraphicsPathItem, QGraphicsItem,
     QMenu, QInputDialog, QDialog, QFormLayout, QDoubleSpinBox, QSpinBox,
     QLineEdit, QDialogButtonBox, QComboBox, QUndoCommand, QUndoStack,
     QVBoxLayout, QLabel, QTabWidget, QTextEdit, QWidget, QHBoxLayout,
@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPolygonF, QPainterPath
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QLineF, QRectF
 
+from schematic.net_manager import NetManager
 from schematic.spice_units import normalize_spice_value, try_parse_value, format_value
 
 SCALE = 10
@@ -69,6 +70,20 @@ class AddWireCommand(QUndoCommand):
         for wire in self.wires:
             if wire.scene() is self.scene:
                 self.scene.removeItem(wire)
+
+
+class MoveWireEndpointCommand(QUndoCommand):
+    def __init__(self, wire, old_line, new_line):
+        super().__init__("Move Wire Endpoint")
+        self.wire = wire
+        self.old_line = QLineF(old_line)
+        self.new_line = QLineF(new_line)
+
+    def redo(self):
+        self.wire.setLine(self.new_line)
+
+    def undo(self):
+        self.wire.setLine(self.old_line)
 
 
 class DeleteCommand(QUndoCommand):
@@ -1206,9 +1221,15 @@ class SchematicCanvas(QGraphicsView):
         self._block_start = None
         self._block_preview = None
         self._pending_instance = None
+        self._preview_item = None
+        self._wire_drag_item = None
+        self._wire_drag_end = None
+        self._wire_drag_fixed = None
+        self._wire_drag_old_line = None
         self._highlighted_nets = set()
         self._highlight_items = []
         self._junction_items = []
+        self._net_manager = NetManager()
         self._snap_to_grid = True
         self.undo_stack = QUndoStack(self)
         self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
@@ -1225,6 +1246,8 @@ class SchematicCanvas(QGraphicsView):
         self._block_start = None
         if mode != "instance":
             self._pending_instance = None
+            self._clear_instance_preview()
+        self._clear_wire_drag()
         self._clear_wire_preview()
         self._clear_pin_indicator()
         self._clear_block_preview()
@@ -1244,7 +1267,7 @@ class SchematicCanvas(QGraphicsView):
         mods = event.modifiers()
         if key == Qt.Key_Escape:
             self._scene.clearSelection()
-            self.start_mode("select")
+            self._cancel_mode()
         elif mods == Qt.ControlModifier and key == Qt.Key_A:
             for item in self._scene.items():
                 if item.flags() & item.ItemIsSelectable:
@@ -1328,7 +1351,29 @@ class SchematicCanvas(QGraphicsView):
         elif self._mode == "instance":
             self._place_pending_instance(pos)
         else:
+            clicked_items = self._scene.items(self.mapToScene(event.pos())) if self._mode == "select" else []
+            if event.button() == Qt.LeftButton and self._mode == "select":
+                endpoint = self._find_wire_endpoint(pos, tol=8.0)
+                if endpoint is not None:
+                    wire, drag_end, fixed_point = endpoint
+                    self._wire_drag_item = wire
+                    self._wire_drag_end = drag_end
+                    self._wire_drag_fixed = QPointF(fixed_point)
+                    self._wire_drag_old_line = QLineF(wire.line())
+                    self._mode = "_wire_drag"
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    self.setCursor(Qt.CrossCursor)
+                    event.accept()
+                    return
             super().mousePressEvent(event)
+            if event.button() == Qt.LeftButton and self._mode == "select":
+                for item in clicked_items:
+                    net = self.get_net_for_item(item)
+                    if net:
+                        first_net = net.split(", ", 1)[0]
+                        self._status(f"Net: {net}  ({len(self._net_manager.get_pins_on_net(first_net))} connections)")
+                        self._highlight_net(first_net)
+                        break
 
     def mouseMoveEvent(self, event):
         pos = self._snap(self.mapToScene(event.pos()))
@@ -1336,11 +1381,43 @@ class SchematicCanvas(QGraphicsView):
             snapped_pos = self._get_nearest_connection(pos)
             self._update_pin_indicator(pos)
             self._update_wire_preview(snapped_pos)
+        elif self._mode == "instance" and self._preview_item is not None:
+            self._preview_item.setPos(pos)
         elif self._mode == "block" and self._block_start is not None:
             self._update_block_preview(pos)
+        elif self._mode == "_wire_drag" and self._wire_drag_item is not None:
+            self._set_dragged_wire_endpoint(pos)
+            event.accept()
+            return
+        elif self._mode == "select":
+            self.setCursor(Qt.SizeAllCursor if self._find_wire_endpoint(pos, tol=8.0) is not None else Qt.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._mode == "_wire_drag" and self._wire_drag_item is not None:
+            final_pos = self._snap(self.mapToScene(event.pos()))
+            pin_pos = self._find_nearest_pin(final_pos, tol=12.0)
+            wire_pos = self._find_nearest_wire_point(final_pos, tol=12.0)
+            if pin_pos is not None:
+                final_pos = pin_pos
+            elif wire_pos is not None:
+                final_pos = wire_pos
+
+            old_line = QLineF(self._wire_drag_old_line)
+            self._set_dragged_wire_endpoint(final_pos)
+            new_line = QLineF(self._wire_drag_item.line())
+            if not self._same_line(old_line, new_line):
+                self.undo_stack.push(MoveWireEndpointCommand(self._wire_drag_item, old_line, new_line))
+
+            self._clear_wire_drag()
+            self._mode = "select"
+            self.setDragMode(QGraphicsView.RubberBandDrag)
+            self.setCursor(Qt.ArrowCursor)
+            self._rebuild_junctions()
+            self._scene.update()
+            self.viewport().update()
+            event.accept()
+            return
         if self._mode == "block" and self._block_start is not None:
             end = self._snap(self.mapToScene(event.pos()))
             rect = QRectF(self._block_start, end).normalized()
@@ -1414,6 +1491,7 @@ class SchematicCanvas(QGraphicsView):
         return [(sx, sy, mid[0], mid[1]), (mid[0], mid[1], ex, ey)]
 
     def highlight_net(self, net_name):
+        self._rebuild_nets()
         self.clear_highlights()
         if not net_name:
             return
@@ -1440,6 +1518,35 @@ class SchematicCanvas(QGraphicsView):
             overlay.setZValue(900)
             self._scene.addItem(overlay)
             self._highlight_items.append(overlay)
+
+    def _highlight_net(self, net_name: str):
+        """Highlight all wires and components on this net."""
+        if not net_name:
+            return
+        connected_pins = self._net_manager.get_pins_on_net(net_name)
+        for item in self._scene.items():
+            if isinstance(item, WireItem) and getattr(item, "net_name", "") == net_name:
+                item.setSelected(True)
+            elif isinstance(item, ComponentItem):
+                cname = getattr(item, "comp_name", "")
+                for pin in getattr(item, "pin_positions", {}).keys():
+                    if f"{cname}.{pin}" in connected_pins:
+                        item.setSelected(True)
+                        break
+
+    def get_net_for_item(self, item) -> str:
+        """Return net name for a component pin or wire."""
+        item = self._owning_item(item)
+        if hasattr(item, "net_name"):
+            return item.net_name or ""
+        if hasattr(item, "comp_name"):
+            nets = set()
+            for pin in getattr(item, "pin_positions", {}).keys():
+                n = self._net_manager.get_net_for_pin(item.comp_name, pin)
+                if n:
+                    nets.add(n)
+            return ", ".join(sorted(nets))
+        return ""
 
     def clear_highlights(self):
         for item in self._highlight_items:
@@ -1519,9 +1626,18 @@ class SchematicCanvas(QGraphicsView):
             "display_cell": display_name,
         }
         self.start_mode("instance")
+        self._clear_instance_preview()
+        if cell_name in self._symbols:
+            self._preview_item = ComponentItem(cell_name, self._symbols, name="", props=props or {})
+            self._preview_item.setOpacity(0.45)
+            self._preview_item.setFlag(QGraphicsItem.ItemIsMovable, False)
+            self._preview_item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+            self._preview_item.setZValue(1000)
+            self._scene.addItem(self._preview_item)
         self._status(f"Place instance: {library + '/' if library else ''}{display_name}")
 
     def _place_pending_instance(self, pos):
+        self._clear_instance_preview()
         if not self._pending_instance:
             self.start_mode("select")
             return
@@ -1712,6 +1828,78 @@ class SchematicCanvas(QGraphicsView):
             self._scene.removeItem(self._block_preview)
         self._block_preview = None
 
+    def _clear_instance_preview(self):
+        if self._preview_item is not None and self._preview_item.scene() is self._scene:
+            self._scene.removeItem(self._preview_item)
+        self._preview_item = None
+
+    def _clear_wire_drag(self):
+        self._wire_drag_item = None
+        self._wire_drag_end = None
+        self._wire_drag_fixed = None
+        self._wire_drag_old_line = None
+
+    def _cancel_mode(self):
+        self._scene.clearSelection()
+        self._clear_instance_preview()
+        self._clear_wire_drag()
+        self.start_mode("select")
+
+    def _wire_scene_endpoints(self, wire):
+        line = wire.line()
+        return wire.mapToScene(line.p1()), wire.mapToScene(line.p2())
+
+    def _set_wire_scene_line(self, wire, p1, p2):
+        local_p1 = wire.mapFromScene(p1)
+        local_p2 = wire.mapFromScene(p2)
+        wire.setLine(QLineF(local_p1, local_p2))
+
+    def _set_dragged_wire_endpoint(self, scene_pos):
+        if self._wire_drag_item is None or self._wire_drag_fixed is None:
+            return
+        if self._wire_drag_end == "start":
+            self._set_wire_scene_line(self._wire_drag_item, scene_pos, self._wire_drag_fixed)
+        else:
+            self._set_wire_scene_line(self._wire_drag_item, self._wire_drag_fixed, scene_pos)
+
+    def _same_line(self, a, b, tol=0.001):
+        return (
+            abs(a.x1() - b.x1()) <= tol and abs(a.y1() - b.y1()) <= tol
+            and abs(a.x2() - b.x2()) <= tol and abs(a.y2() - b.y2()) <= tol
+        )
+
+    def _find_wire_endpoint(self, scene_pos: QPointF, tol: float = 8.0):
+        for item in self._wire_items():
+            p1, p2 = self._wire_scene_endpoints(item)
+            if QLineF(p1, scene_pos).length() < tol:
+                return item, "start", p2
+            if QLineF(p2, scene_pos).length() < tol:
+                return item, "end", p1
+        return None
+
+    def _find_nearest_pin(self, scene_pos: QPointF, tol: float = 12.0):
+        best_dist = tol
+        best_pos = None
+        for candidate in self._pin_points():
+            dist = QLineF(scene_pos, candidate).length()
+            if dist < best_dist:
+                best_dist = dist
+                best_pos = candidate
+        return best_pos
+
+    def _find_nearest_wire_point(self, scene_pos: QPointF, tol: float = 12.0):
+        best_dist = tol
+        best_pos = None
+        for item in self._wire_items():
+            if item is self._wire_drag_item:
+                continue
+            for point in self._wire_scene_endpoints(item):
+                dist = QLineF(scene_pos, point).length()
+                if dist < best_dist:
+                    best_dist = dist
+                    best_pos = point
+        return best_pos
+
     def _label_items(self):
         return [item for item in self._scene.items() if isinstance(item, NetLabelItem)]
 
@@ -1811,6 +1999,10 @@ class SchematicCanvas(QGraphicsView):
             self._add_junction_marker(point, 6, "#a6e3a1", "circle")
         for point in self._pin_connected_endpoints(endpoints):
             self._add_junction_marker(point, 4, "#89b4fa", "square")
+        self._rebuild_nets()
+
+    def _rebuild_nets(self):
+        self._net_manager.rebuild_from_scene(self._scene)
 
     def _add_junction_marker(self, point, radius, color, shape):
         if shape == "square":
@@ -1992,6 +2184,7 @@ class SchematicCanvas(QGraphicsView):
             self._scene.addItem(WireItem(mid.x(), mid.y(), p2.x(), p2.y(), net_name=net_name))
 
     def to_dict(self):
+        self._rebuild_nets()
         data = {"components": [], "wires": [], "labels": [], "ports": [], "blocks": []}
         for item in self._scene.items():
             if isinstance(item, ComponentItem):
@@ -2013,6 +2206,7 @@ class SchematicCanvas(QGraphicsView):
                 data["ports"].append(item.to_dict())
             elif isinstance(item, BlockItem):
                 data["blocks"].append(item.to_dict())
+        data["nets"] = self._net_manager.to_dict()
         return data
 
     def load_dict(self, data):
@@ -2038,6 +2232,8 @@ class SchematicCanvas(QGraphicsView):
             self._scene.addItem(PortItem.from_dict(port_data))
         for block_data in data.get("blocks", []):
             self._scene.addItem(BlockItem.from_dict(block_data))
+        if "nets" in data:
+            self._net_manager.from_dict(data["nets"])
         self.undo_stack.clear()
         self._rebuild_junctions()
 
@@ -2048,6 +2244,7 @@ class SchematicCanvas(QGraphicsView):
         self.clear_highlights()
         self._scene.clear()
         self._junction_items = []
+        self._net_manager = NetManager()
         self._wire_start = None
         self._block_start = None
         self.undo_stack.clear()

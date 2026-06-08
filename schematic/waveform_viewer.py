@@ -7,11 +7,12 @@ import numpy as np
 
 
 class WaveformViewer(QMainWindow):
-    def __init__(self, data_text, title="Simulation Results"):
+    def __init__(self, data_text="", title="Simulation Results"):
         super().__init__()
         self.setWindowTitle("Waveform Viewer")
         self.resize(900, 600)
         self._nav_toolbar = None
+        self._trace_count = 0
 
         self.figure = Figure(facecolor="#1e1e2e")
         self.canvas = FigureCanvas(self.figure)
@@ -21,8 +22,9 @@ class WaveformViewer(QMainWindow):
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage(title)
 
-        data = self._parse_ngspice_output(data_text)
-        self._plot_data(data)
+        self.clear_all()
+        if data_text:
+            self.add_trace(data_text)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
 
     def _build_toolbar(self):
@@ -80,49 +82,71 @@ class WaveformViewer(QMainWindow):
             index += 1
         return best
 
-    def _plot_data(self, data):
+    def clear_all(self):
         self.figure.clear()
+        self._trace_count = 0
+        axes = self._setup_axes()
+        axes.text(
+            0.5,
+            0.5,
+            "No plottable ngspice data found",
+            ha="center",
+            va="center",
+            color="#cdd6f4",
+            transform=axes.transAxes,
+        )
+        axes.set_xlabel("X", color="#cdd6f4")
+        axes.set_ylabel("Y", color="#cdd6f4")
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+    def add_trace(self, output_str, label=""):
+        data = self._parse_ngspice_output(output_str)
+        if not data:
+            return
+        if self._trace_count == 0:
+            self.figure.clear()
+            axes = self._setup_axes()
+        else:
+            axes = self.figure.axes[0] if self.figure.axes else self._setup_axes()
+        self._plot_data(data, axes, label)
+        self._trace_count += 1
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+    def load_output(self, output_str):
+        self.clear_all()
+        self.add_trace(output_str)
+
+    def _setup_axes(self):
         axes = self.figure.add_subplot(111)
         axes.set_facecolor("#181825")
         axes.grid(True, color="#313244", linewidth=0.8)
         axes.tick_params(colors="#cdd6f4")
         for spine in axes.spines.values():
             spine.set_color("#cdd6f4")
+        axes.set_title("Simulation Results", color="#cdd6f4")
+        return axes
 
-        if not data:
-            axes.text(
-                0.5,
-                0.5,
-                "No plottable ngspice data found",
-                ha="center",
-                va="center",
-                color="#cdd6f4",
-                transform=axes.transAxes,
-            )
-            axes.set_xlabel("X", color="#cdd6f4")
-            axes.set_ylabel("Y", color="#cdd6f4")
-            self.figure.tight_layout()
-            self.canvas.draw_idle()
-            return
-
+    def _plot_data(self, data, axes, label_prefix=""):
         columns = list(data.keys())
         x_name = columns[0]
         x = np.array(data[x_name], dtype=float)
-        colors = ["#89b4fa", "#a6e3a1", "#f38ba8", "#fab387", "#f9e2af"]
+        colors = ["#89b4fa", "#a6e3a1", "#f38ba8", "#fab387", "#f9e2af", "#cba6f7", "#94e2d5"]
 
         for idx, name in enumerate(columns[1:]):
             y = np.array(data[name], dtype=float)
-            axes.plot(x, y, label=name, color=colors[idx % len(colors)], linewidth=1.6)
+            trace_label = f"{label_prefix} {name}".strip() if label_prefix else name
+            color = colors[(self._trace_count + idx) % len(colors)]
+            axes.plot(x, y, label=trace_label, color=color, linewidth=1.6)
 
         if len(columns) == 1:
-            axes.plot(np.arange(len(x)), x, label=x_name, color=colors[0], linewidth=1.6)
+            trace_label = f"{label_prefix} {x_name}".strip() if label_prefix else x_name
+            axes.plot(np.arange(len(x)), x, label=trace_label, color=colors[self._trace_count % len(colors)], linewidth=1.6)
 
         axes.set_xlabel(self._x_label(x_name), color="#cdd6f4")
         axes.set_ylabel("Signal", color="#cdd6f4")
         axes.legend(facecolor="#181825", edgecolor="#313244", labelcolor="#cdd6f4")
-        axes.set_title("Simulation Results", color="#cdd6f4")
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
 
     def _x_label(self, x_name):
         name = x_name.lower()

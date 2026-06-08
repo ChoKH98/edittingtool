@@ -3,8 +3,17 @@ import os
 from PyQt5.QtCore import QLineF, QPointF
 from PyQt5.QtWidgets import QGraphicsTextItem
 
+from schematic.spice_units import normalize_spice_value
+
 
 MODEL_LIB = "/usr/share/pdk/ihp-sg13g2/libs.tech/ngspice/models/sg13g2.lib"
+
+
+def _export_value(value):
+    text = str(value).strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    return normalize_spice_value(text)
 
 
 def export_netlist(items_or_canvas=None, cellname=None, corner="tt"):
@@ -86,7 +95,8 @@ class NetlistExporter:
                     f"{self._net(name, 'B', nets)} {model} w={props.get('w', '0.5u')} "
                     f"l={props.get('l', '1u')} m={props.get('m', '1')}"
                 )
-            return f"{self._spice_name(name, 'R')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {props.get('value', '1k')}"
+            value = _export_value(props.get('value', '1k'))
+            return f"{self._spice_name(name, 'R')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {value}"
 
         if ctype == "capacitor":
             model = props.get("model", "")
@@ -95,7 +105,8 @@ class NetlistExporter:
                     f"{self._spice_name(name, 'X')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} "
                     f"{model} w={props.get('w', '5u')} l={props.get('l', '5u')} m={props.get('m', '1')}"
                 )
-            return f"{self._spice_name(name, 'C')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {props.get('value', '1p')}"
+            value = _export_value(props.get('value', '1p'))
+            return f"{self._spice_name(name, 'C')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {value}"
 
         if ctype == "npn":
             model = props.get("model", "npn13G2")
@@ -106,27 +117,31 @@ class NetlistExporter:
             )
 
         if ctype == "inductor":
-            return f"{self._spice_name(name, 'L')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {props.get('value', '1n')}"
+            value = _export_value(props.get('value', '1n'))
+            return f"{self._spice_name(name, 'L')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} {value}"
 
         if ctype == "vdc":
-            return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} DC {props.get('dc', '0')}"
+            dc_val = props.get('dc', '0')
+            return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} DC {dc_val}"
 
         if ctype == "vpulse":
-            vals = [props.get(key, default) for key, default in (
+            vals = [_export_value(props.get(key, default)) for key, default in (
                 ("v1", "0"), ("v2", "1.8"), ("td", "0"), ("tr", "10p"),
                 ("tf", "10p"), ("pw", "500p"), ("per", "1n"))]
             return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} PULSE({' '.join(map(str, vals))})"
 
         if ctype == "vsin":
-            vals = [props.get(key, default) for key, default in (
+            vals = [_export_value(props.get(key, default)) for key, default in (
                 ("voff", "0"), ("vamp", "1"), ("freq", "1G"), ("td", "0"), ("theta", "0"))]
             return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} SIN({' '.join(map(str, vals))})"
 
         if ctype == "vpwl":
-            return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} PWL({props.get('pwl', '')})"
+            pwl = " ".join(_export_value(token) for token in str(props.get('pwl', '')).split())
+            return f"{self._spice_name(name, 'V')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} PWL({pwl})"
 
         if ctype == "idc":
-            return f"{self._spice_name(name, 'I')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} DC {props.get('dc', '0')}"
+            dc_val = _export_value(props.get('dc', '0'))
+            return f"{self._spice_name(name, 'I')} {self._net(name, 'P', nets)} {self._net(name, 'N', nets)} DC {dc_val}"
 
         if ctype in ("vdd", "vss"):
             net = self._net(name, "P", nets, props.get("net", name))
@@ -152,6 +167,8 @@ class NetlistExporter:
 
     def _mos_dimension(self, value):
         text = str(value).strip()
+        if text.startswith("{") and text.endswith("}"):
+            return text
         return text if any(ch.isalpha() for ch in text) else f"{text}u"
 
     def _is_pdk_subckt_model(self, model):

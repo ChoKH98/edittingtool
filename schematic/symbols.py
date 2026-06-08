@@ -162,7 +162,7 @@ SYMBOLS = {
         "name_offset": (1.8, 0),
         "value_offset": (-2.0, 0),
         "spice_prefix": "V",
-        "params": {"dc": "1.8"},
+        "params": {"dc": "1.8", "ac": ""},
     },
     "vpulse": {
         "lines": [

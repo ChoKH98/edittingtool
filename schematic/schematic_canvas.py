@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPolygonF, QPainterPath
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QLineF, QRectF
 
+from schematic.spice_units import normalize_spice_value, try_parse_value, format_value
+
 SCALE = 10
 GRID = 10
 
@@ -395,6 +397,12 @@ class ComponentItem(QGraphicsItemGroup):
 
 
 class ComponentPropertiesDialog(QDialog):
+    NUMERIC_VALUE_KEYS = {
+        "dc", "tran", "v1", "v2", "td", "tr", "tf", "pw", "per",
+        "voff", "vamp", "freq", "value", "ac", "idc",
+        "resistance", "capacitance", "inductance",
+    }
+
     TYPE_NAMES = {
         "nmos": "NMOS Transistor", "pmos": "PMOS Transistor",
         "resistor": "Resistor", "capacitor": "Capacitor", "inductor": "Inductor",
@@ -534,9 +542,8 @@ class ComponentPropertiesDialog(QDialog):
             self._add_unit_line("value", "Value", "1", ["H", "mH", "uH", "nH", "pH"])
             self._add_line("q", "Q", "10")
         elif ctype == "vdc":
-            self._add_unit_line("dc", "DC", "1.8", ["V", "mV"])
-            self._add_line("ac", "AC", "0")
-            self._add_line("tran", "TRAN", self._base_value("dc", "1.8"))
+            self._add_unit_line("dc", "DC Voltage", "1.8", ["V", "mV"])
+            self._add_line("ac", "AC Magnitude (optional)", "")
         elif ctype == "vpulse":
             self._add_line("v1", "V1 (low)", "0")
             self._add_line("v2", "V2 (high)", "1.8")
@@ -566,7 +573,13 @@ class ComponentPropertiesDialog(QDialog):
     def _add_line(self, key, label, default):
         edit = QLineEdit(str(self.component.props.get(key, default)))
         edit.textChanged.connect(self._update_preview)
-        self.params_layout.addRow(label, edit)
+        if self._is_numeric_value_key(key):
+            row, preview = self._value_preview_row(edit)
+            edit.textChanged.connect(lambda text, p=preview: self._update_value_preview(p, text))
+            self._update_value_preview(preview, edit.text())
+            self.params_layout.addRow(label, row)
+        else:
+            self.params_layout.addRow(label, edit)
         self.fields[key] = edit
         return edit
 
@@ -596,18 +609,97 @@ class ComponentPropertiesDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         edit = QLineEdit()
         combo = QComboBox()
+        if self._is_numeric_value_key(key):
+            combo.addItem("")
         combo.addItems(units)
-        value, unit = self._split_unit(str(self.component.props.get(key, default)), units, default)
+        current_value = str(self.component.props.get(key, default))
+        value, unit = self._split_unit(current_value, units, default)
+        if self._is_numeric_value_key(key) and key in self.component.props and self._is_plain_number(current_value):
+            unit = ""
         edit.setText(value)
         combo.setCurrentText(unit)
         edit.textChanged.connect(self._update_preview)
         combo.currentTextChanged.connect(self._update_preview)
         layout.addWidget(edit, 1)
         layout.addWidget(combo)
+        if self._is_numeric_value_key(key):
+            preview = QLabel()
+            preview.setStyleSheet("color: #6c7086; font-size: 10px;")
+            preview.setMinimumWidth(80)
+            layout.addWidget(preview)
+            edit.textChanged.connect(lambda _text, e=edit, c=combo, p=preview: self._update_value_preview(p, e.text(), c.currentText()))
+            combo.currentTextChanged.connect(lambda _text, e=edit, c=combo, p=preview: self._update_value_preview(p, e.text(), c.currentText()))
+            self._update_value_preview(preview, edit.text(), combo.currentText())
         self.params_layout.addRow(label, row)
         self.fields[key] = edit
         self.unit_fields[key] = combo
         return edit
+
+    def _is_numeric_value_key(self, key):
+        return key in self.NUMERIC_VALUE_KEYS
+
+    def _value_preview_row(self, edit):
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        edit.setMinimumWidth(120)
+        preview = QLabel()
+        preview.setStyleSheet("color: #6c7086; font-size: 10px;")
+        preview.setMinimumWidth(80)
+        layout.addWidget(edit, 1)
+        layout.addWidget(preview)
+        return row, preview
+
+    def _update_value_preview(self, preview, text, unit=''):
+        value_text = self._combine_unit_value(str(text).strip(), unit)
+        parsed = try_parse_value(value_text, default=None)
+        if parsed is None:
+            preview.setText("?")
+            preview.setStyleSheet("color: #f38ba8; font-size: 10px;")
+            return
+        unit_text = self._preview_unit_suffix(unit)
+        preview.setText(f"= {parsed:.4g}{unit_text}")
+        preview.setStyleSheet("color: #a6e3a1; font-size: 10px;")
+
+    def _preview_unit_suffix(self, unit):
+        text = str(unit or "")
+        if not text:
+            return ""
+        if "V" in text:
+            return " V"
+        if "A" in text:
+            return " A"
+        if "Hz" in text:
+            return " Hz"
+        if "s" in text:
+            return " s"
+        if "H" in text:
+            return " H"
+        if "F" in text:
+            return " F"
+        if "Ω" in text or "Ohm" in text:
+            return " Ohm"
+        return ""
+
+    def _combine_unit_value(self, value, unit):
+        value = str(value or "").strip()
+        unit = str(unit or "")
+        if value and unit and not self._has_value_suffix(value):
+            return f"{value}{unit}"
+        return value
+
+    def _has_value_suffix(self, value):
+        text = str(value or "").strip()
+        if self._is_plain_number(text):
+            return False
+        return any(ch.isalpha() or ch in "Ω°" for ch in text)
+
+    def _is_plain_number(self, value):
+        try:
+            float(str(value).strip())
+            return True
+        except ValueError:
+            return False
 
     def _build_info_tab(self):
         page = QWidget()
@@ -762,7 +854,9 @@ class ComponentPropertiesDialog(QDialog):
             else:
                 value = widget.text().strip()
                 if key in self.unit_fields:
-                    value += self.unit_fields[key].currentText()
+                    value = self._combine_unit_value(value, self.unit_fields[key].currentText())
+                if self._is_numeric_value_key(key) and value:
+                    value = normalize_spice_value(value)
                 props[key] = value
         if self.comp_type == "vpwl":
             vals = []
@@ -789,7 +883,8 @@ class ComponentPropertiesDialog(QDialog):
         if ctype == "inductor":
             return f"{name} n1 n2 {props.get('value', '1nH')}"
         if ctype == "vdc":
-            return f"{name} p n DC {props.get('dc', '1.8V').replace('V', '')}"
+            spice_name = name if name[:1].upper() == "V" else f"V{name}"
+            return f"{spice_name} n+ n- DC {props.get('dc', '1.8')}"
         if ctype == "vpulse":
             vals = [props.get(k, d) for k, d in (
                 ("v1", "0"), ("v2", "1.8"), ("td", "0ns"), ("tr", "10ps"),

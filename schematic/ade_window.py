@@ -1,6 +1,6 @@
 import json
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
@@ -21,7 +21,11 @@ class ADEWindow(QMainWindow):
         self._canvas = schematic_canvas
         self._thread = None
         self._worker = None
+        self._sweep_thread = None
+        self._sweep_worker = None
+        self._pending_sweep_next = False
         self._viewer = None
+        self._waveform_viewer = None
         self.setWindowTitle("SpiceSim — Circuit Simulator")
         self.resize(900, 700)
         self.setStyleSheet("""
@@ -116,6 +120,7 @@ class ADEWindow(QMainWindow):
             self._add_analysis_row(analysis, args, enabled)
 
         self.tabs = QTabWidget()
+        self._tabs = self.tabs
         splitter.addWidget(self.tabs)
 
         self.outputs_page = QWidget()
@@ -146,10 +151,58 @@ class ADEWindow(QMainWindow):
         self._add_var_row("vdd", "1.8")
         self.tabs.addTab(self.vars_page, "Design Variables")
 
+        self.sweep_page = self._build_param_sweep_tab()
+        self.tabs.addTab(self.sweep_page, "Param Sweep")
+
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.tabs.addTab(self.log_edit, "Log")
         splitter.setSizes([320, 360])
+
+    def _build_param_sweep_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+
+        title = QLabel("Parameter Sweep Setup")
+        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(title)
+
+        self._sweep_param_edit = QLineEdit()
+        self._sweep_param_edit.setPlaceholderText("W")
+        form.addRow("Sweep Parameter:", self._sweep_param_edit)
+
+        hint = QLabel("e.g.: W (use {W} in component value)")
+        hint.setStyleSheet("color: #a6adc8;")
+        form.addRow("", hint)
+
+        self._sweep_base_sim_combo = QComboBox()
+        self._sweep_base_sim_combo.addItems(["Tran", "DC", "AC"])
+        form.addRow("Base Simulation:", self._sweep_base_sim_combo)
+
+        self._sweep_type_combo = QComboBox()
+        self._sweep_type_combo.addItems(["Linear", "Decade (Log)"])
+        form.addRow("Sweep Type:", self._sweep_type_combo)
+
+        self._sweep_start_edit = QLineEdit("0")
+        self._sweep_stop_edit = QLineEdit("1")
+        self._sweep_step_edit = QLineEdit("0.1")
+        self._sweep_points_edit = QLineEdit("10")
+        form.addRow("Start:", self._sweep_start_edit)
+        form.addRow("Stop:", self._sweep_stop_edit)
+        form.addRow("Step:", self._sweep_step_edit)
+        form.addRow("Points per decade:", self._sweep_points_edit)
+
+        unit_hint = QLabel("Unit hint: e.g. 1u, 500n, 2.0 (auto-parsed)")
+        unit_hint.setStyleSheet("color: #a6adc8;")
+        form.addRow("", unit_hint)
+
+        layout.addLayout(form)
+        self._run_sweep_btn = QPushButton("Run Sweep")
+        self._run_sweep_btn.clicked.connect(self._run_param_sweep)
+        layout.addWidget(self._run_sweep_btn)
+        layout.addStretch(1)
+        return page
 
     def _add_analysis_row(self, analysis, args, enabled):
         row = self.analysis_table.rowCount()
@@ -256,6 +309,152 @@ class ADEWindow(QMainWindow):
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.finished.connect(self._clear_worker_refs)
         self._thread.start()
+
+    def _get_netlist(self):
+        if self._canvas is None:
+            QMessageBox.warning(self, "SpiceSim", "No schematic canvas is available.")
+            return ""
+        return export_netlist(self._canvas, "top_circuit", corner=self.corner_combo.currentText())
+
+    def _run_param_sweep(self):
+        from schematic.spice_units import try_parse_value
+        param = self._sweep_param_edit.text().strip()
+        if not param:
+            self._log("Sweep: enter a parameter name.")
+            return
+
+        start = try_parse_value(self._sweep_start_edit.text(), 0.0)
+        stop = try_parse_value(self._sweep_stop_edit.text(), 1.0)
+        step = try_parse_value(self._sweep_step_edit.text(), 0.1)
+
+        sweep_type = self._sweep_type_combo.currentText()
+        if sweep_type.startswith("Decade"):
+            import math
+            if start <= 0 or stop <= 0:
+                self._log("Log sweep requires start > 0 and stop > 0")
+                return
+            try:
+                n_per_decade = int(self._sweep_points_edit.text() or "10")
+            except ValueError:
+                self._log("Points per decade must be an integer")
+                return
+            n_decades = math.log10(stop / start)
+            n_pts = max(2, int(round(abs(n_decades) * n_per_decade)) + 1)
+            sweep_values = [start * (10 ** (i * n_decades / (n_pts - 1))) for i in range(n_pts)]
+        else:
+            if step <= 0:
+                self._log("Step must be > 0")
+                return
+            import math
+            n_pts = int(math.floor((stop - start) / step)) + 1
+            sweep_values = [start + i * step for i in range(max(0, n_pts))]
+
+        if not sweep_values:
+            self._log("Sweep: no values generated.")
+            return
+
+        self._log(f"Starting {sweep_type} sweep of '{param}': {len(sweep_values)} points from {start} to {stop}")
+        self._sweep_results = {}
+        self._sweep_param_name = param
+        self._sweep_values = sweep_values
+        self._sweep_index = 0
+        self._run_next_sweep_step()
+
+    def _run_next_sweep_step(self):
+        if self._sweep_index >= len(self._sweep_values):
+            self._on_sweep_complete()
+            return
+
+        val = self._sweep_values[self._sweep_index]
+        self._log(f"  Sweep step {self._sweep_index + 1}/{len(self._sweep_values)}: {self._sweep_param_name}={val:.4g}")
+
+        netlist = self._get_netlist()
+        if not netlist:
+            self._log("No netlist available.")
+            return
+
+        base_sim = self._sweep_base_sim_combo.currentText()
+        analysis = self._sweep_analysis_line(base_sim)
+        lines = [netlist, f".param {self._sweep_param_name}={val:.6g}", analysis]
+        lines.extend(self._output_lines([(base_sim, "")]))
+        lines.append(".control")
+        lines.append("run")
+        lines.append("write /tmp/ade_sweep.raw")
+        lines.append(".endc")
+        lines.append(".end")
+
+        netlist_file = "/tmp/ade_sweep.sp"
+        with open(netlist_file, "w") as f:
+            f.write("\n".join(lines) + "\n")
+
+        self._current_sweep_val = val
+        self._sweep_thread = QThread(self)
+        self._sweep_worker = SimWorker(netlist_file, "/tmp/ade_sweep.raw")
+        self._sweep_worker.moveToThread(self._sweep_thread)
+        self._sweep_thread.started.connect(self._sweep_worker.run)
+        self._sweep_worker.finished.connect(self._on_sweep_step_done)
+        self._sweep_worker.finished.connect(self._sweep_thread.quit)
+        self._sweep_worker.finished.connect(self._sweep_worker.deleteLater)
+        self._sweep_thread.finished.connect(self._sweep_thread.deleteLater)
+        self._sweep_thread.finished.connect(self._clear_sweep_worker_refs)
+        self._sweep_thread.start()
+
+    def _sweep_analysis_line(self, base_sim):
+        if base_sim == "Tran":
+            args = self._analysis_args_for("Tran", "10p 10n 0").split()
+            tstep = args[0] if len(args) > 0 else "1n"
+            tstop = args[1] if len(args) > 1 else "100n"
+            return f".tran {tstep} {tstop}"
+        if base_sim == "DC":
+            return ".op"
+        args = self._analysis_args_for("AC", "DEC 20 1k 1G").split()
+        fstart = args[2] if len(args) > 2 else "1k"
+        fstop = args[3] if len(args) > 3 else "1G"
+        return f".ac dec 20 {fstart} {fstop}"
+
+    def _analysis_args_for(self, analysis_name, default):
+        for row in range(self.analysis_table.rowCount()):
+            if self._table_text(self.analysis_table, row, 1) == analysis_name:
+                return self._table_text(self.analysis_table, row, 2) or default
+        return default
+
+    def _on_sweep_step_done(self, _rawfile, returncode, stdout):
+        val = self._current_sweep_val
+        if returncode != 0:
+            self._log(f"  Error at {self._sweep_param_name}={val:.4g}: {stdout}")
+        self._sweep_results[val] = stdout
+        self._sweep_index += 1
+        self._pending_sweep_next = True
+
+    def _clear_sweep_worker_refs(self):
+        self._sweep_thread = None
+        self._sweep_worker = None
+        if self._pending_sweep_next:
+            self._pending_sweep_next = False
+            QTimer.singleShot(0, self._run_next_sweep_step)
+
+    def _on_sweep_complete(self):
+        self._log(f"Sweep complete. {len(self._sweep_results)} results collected.")
+        self._show_sweep_waveforms()
+
+    def _show_sweep_waveforms(self):
+        if self._waveform_viewer is None:
+            self._waveform_viewer = WaveformViewer("")
+        viewer = self._waveform_viewer
+        if hasattr(viewer, "clear_all"):
+            viewer.clear_all()
+
+        param = self._sweep_param_name
+        for val, output in sorted(self._sweep_results.items()):
+            label = f"{param}={val:.4g}"
+            if hasattr(viewer, "add_trace"):
+                viewer.add_trace(output, label=label)
+            else:
+                viewer.load_output(output)
+
+        viewer.show()
+        viewer.raise_()
+        self._log(f"Waveforms shown in viewer ({len(self._sweep_results)} curves).")
 
     def _write_netlist(self):
         if self._canvas is None:
@@ -416,6 +615,9 @@ class ADEWindow(QMainWindow):
     def _log(self, text):
         if text:
             self.log_edit.append(str(text))
+
+
+SpiceSimWindow = ADEWindow
 
 
 if __name__ == "__main__":

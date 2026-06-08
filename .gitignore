@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.env
+*.tmp
+*.log
+C:
+wsl.localhost
+ python3
+.idea/
+.vscode/
+*.swp
+*.swo

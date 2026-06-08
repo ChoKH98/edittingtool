@@ -1,0 +1,132 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1780901197653,
+  "projectRoot": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\whqkrel\\edittingtool",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "pex": {
+      "path": "pex",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1780901197317,
+      "keyFiles": [
+        "__init__.py",
+        "pex_report.py",
+        "pex_engine.py"
+      ]
+    },
+    "schematic": {
+      "path": "schematic",
+      "purpose": null,
+      "fileCount": 9,
+      "lastAccessed": 1780901197364,
+      "keyFiles": [
+        "netlist_export.py",
+        "symbols.py",
+        "add_instance_dialog.py",
+        "__init__.py",
+        "schematic_canvas.py"
+      ]
+    },
+    "pdk": {
+      "path": "pdk",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1780901197390,
+      "keyFiles": [
+        "ihp_sg13g2.json"
+      ]
+    },
+    "C": {
+      "path": "C",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1780901197428,
+      "keyFiles": []
+    },
+    "__pycache__": {
+      "path": "__pycache__",
+      "purpose": null,
+      "fileCount": 17,
+      "lastAccessed": 1780901197465,
+      "keyFiles": [
+        "pcell.cpython-312.pyc",
+        "pdk_manager.cpython-312.pyc",
+        "drc_engine.cpython-312.pyc",
+        "pdk_loader.cpython-312.pyc",
+        "gds_backend.cpython-312.pyc"
+      ]
+    },
+    "wsl.localhost": {
+      "path": "wsl.localhost",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1780901197503,
+      "keyFiles": []
+    },
+    "lvs": {
+      "path": "lvs",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1780901197542,
+      "keyFiles": [
+        "layout_extractor.py",
+        "__init__.py",
+        "lvs_engine.py",
+        "lvs_report.py"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "C:\\Users\\whqkr\\AppData\\Local\\Temp\\claude\\--wsl-localhost-Ubuntu-24-04-home-whqkrel-edittingtool\\eef49ec6-2257-47aa-9e83-fd9853a36f53\\tasks\\bzm4gfypf.output",
+      "accessCount": 2,
+      "lastAccessed": 1780901946171,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\whqkr\\AppData\\Local\\Temp\\claude\\--wsl-localhost-Ubuntu-24-04-home-whqkrel-edittingtool\\eef49ec6-2257-47aa-9e83-fd9853a36f53\\tasks\\b1852ut7g.output",
+      "accessCount": 1,
+      "lastAccessed": 1780901205948,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\whqkr\\AppData\\Local\\Temp\\claude\\--wsl-localhost-Ubuntu-24-04-home-whqkrel-edittingtool\\eef49ec6-2257-47aa-9e83-fd9853a36f53\\tasks\\bzox5fx1v.output",
+      "accessCount": 1,
+      "lastAccessed": 1780901349382,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\whqkr\\AppData\\Local\\Temp\\claude\\--wsl-localhost-Ubuntu-24-04-home-whqkrel-edittingtool\\eef49ec6-2257-47aa-9e83-fd9853a36f53\\tasks\\b7h21ymym.output",
+      "accessCount": 1,
+      "lastAccessed": 1780902081784,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

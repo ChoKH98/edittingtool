@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl -d Ubuntu-24.04 python3 -m py_compile /home/whqkrel/edittingtool/main.py)",
+      "PowerShell(wsl -d Ubuntu-24.04 python3 -m py_compile /home/whqkrel/edittingtool/main.py; if \\($?\\) { \"PASS: no syntax errors\" } else { \"FAIL: syntax error\" })",
+      "Read(///wsl.localhost/Ubuntu-24.04/home/whqkrel/**)",
+      "Bash(dir \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\")",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\\\\schematic\")",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\\\\pdk\")",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\\\\lvs\")",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\\\\pex\")",
+      "Bash(ls *)",
+      "Bash(codex --version)",
+      "Skill(codex:setup)",
+      "Bash(cd \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\whqkrel\\\\edittingtool\")",
+      "Bash(python3 -c \"import canvas; import main; import via_generator; print\\('imports OK'\\)\")",
+      "Bash(python3 -c \"from canvas import PolygonItem, LabelItem, FlipCommand, RotateCommand, MergeCommand; print\\('classes OK'\\)\")",
+      "Bash(wsl *)",
+      "Bash(node \"C:/Users/whqkr/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs\" task \"Add Virtuoso-like features to the layout editor. The project is at \\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu-24.04\\\\\\\\home\\\\\\\\whqkrel\\\\\\\\edittingtool \\(Windows UNC path\\). Use this path to read and write files directly.\\\\n\\\\nTask: Add the following to the project:\\\\n1. Create \\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu-24.04\\\\\\\\home\\\\\\\\whqkrel\\\\\\\\edittingtool\\\\\\\\via_generator.py with VIA_TYPES dict \\(Cont/Via1/Via2/Via3/Via4\\) and ViaDialog\\(QDialog\\) class\\\\n2. Add PolygonItem\\(QGraphicsPolygonItem\\), LabelItem\\(QGraphicsTextItem\\), FlipCommand, RotateCommand, MergeCommand classes to canvas.py\\\\n3. Add polygon and label draw modes to LayoutCanvas in canvas.py\\\\n4. Add flip_selected\\(\\), rotate_selected\\(\\), merge_selected\\(\\), select_all_on_layer\\(\\) methods to LayoutCanvas\\\\n5. Update add_shapes\\(\\) to handle type==polygon and type==label\\\\n6. Update get_all_shapes\\(\\) to include PolygonItem and LabelItem\\\\n7. Add polygon_action, label_action, flip_h_action, flip_v_action, rotate_ccw_action, rotate_cw_action, merge_action, sel_layer_action, via_action to main.py\\\\n8. Add wire width QDoubleSpinBox to toolbar in main.py\\\\n9. Change coord_changed signal to emit 4 floats \\(x, y, dx, dy\\) for relative coordinate display\" --write --workdir \"\\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu-24.04\\\\\\\\home\\\\\\\\whqkrel\\\\\\\\edittingtool\")"
+    ]
+  }
+}

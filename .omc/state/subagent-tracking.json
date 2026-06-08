@@ -1,0 +1,80 @@
+{
+  "agents": [
+    {
+      "agent_id": "a5faa04c633bf510d",
+      "agent_type": "oh-my-claudecode:explore",
+      "started_at": "2026-06-07T07:33:09.550Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T08:04:38.454Z",
+      "duration_ms": 1888904
+    },
+    {
+      "agent_id": "a06673dedad57202c",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T08:06:22.541Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T08:09:04.909Z",
+      "duration_ms": 162368
+    },
+    {
+      "agent_id": "a8ee43db440abc8c8",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T10:45:12.944Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T10:52:02.168Z",
+      "duration_ms": 409224
+    },
+    {
+      "agent_id": "a092cbd621b0f72a0",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T10:53:12.187Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T11:12:32.906Z",
+      "duration_ms": 1160719
+    },
+    {
+      "agent_id": "a24f140e48abadfee",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T15:28:37.244Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T15:39:33.006Z",
+      "duration_ms": 655762
+    },
+    {
+      "agent_id": "a2a4b3c2b2eacbbf7",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T15:47:28.028Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T15:49:34.576Z",
+      "duration_ms": 126548
+    },
+    {
+      "agent_id": "aa96d5a0504de28fa",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-07T15:51:26.103Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-07T16:01:19.681Z",
+      "duration_ms": 593578
+    },
+    {
+      "agent_id": "af0426f6f5c134801",
+      "agent_type": "codex:codex-rescue",
+      "started_at": "2026-06-08T06:46:56.450Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-06-08T06:47:33.246Z",
+      "duration_ms": 36796
+    }
+  ],
+  "total_spawned": 8,
+  "total_completed": 91,
+  "total_failed": 0,
+  "last_updated": "2026-06-08T06:51:44.996Z"
+}

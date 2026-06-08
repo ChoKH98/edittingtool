@@ -112,7 +112,7 @@ class ADEWindow(QMainWindow):
         splitter.addWidget(self.analysis_table)
         for analysis, args, enabled in (
             ("Tran", "10p 10n 0", True),
-            ("DC", "V1 0 1.8 0.01", False),
+            ("DC", "", False),
             ("AC", "DEC 10 1k 10G", False),
             ("PSS", "1G 20", False),
             ("Pnoise", "V1 1k 10G 100", False),
@@ -129,9 +129,9 @@ class ADEWindow(QMainWindow):
         self.outputs_table.setHorizontalHeaderLabels(["Type", "Name", "Value/Expression", "Save"])
         outputs_layout.addWidget(self.outputs_table)
         add_out = QPushButton("Add Row")
-        add_out.clicked.connect(lambda: self._add_output_row("voltage", "out", "v(out)", True))
+        add_out.clicked.connect(lambda: self._add_output_row("voltage", "", "", True))
         outputs_layout.addWidget(add_out)
-        self._add_output_row("voltage", "out", "v(out)", True)
+        self._add_output_row("voltage", "", "", True)
         self.tabs.addTab(self.outputs_page, "Outputs")
 
         self.vars_page = QWidget()
@@ -314,7 +314,7 @@ class ADEWindow(QMainWindow):
         if self._canvas is None:
             QMessageBox.warning(self, "SpiceSim", "No schematic canvas is available.")
             return ""
-        return export_netlist(self._canvas, "top_circuit", corner=self.corner_combo.currentText())
+        return export_netlist(self._canvas, "top_circuit", corner=self.corner_combo.currentText(), for_simulation=True)
 
     def _run_param_sweep(self):
         from schematic.spice_units import try_parse_value
@@ -464,7 +464,7 @@ class ADEWindow(QMainWindow):
         if not analyses:
             QMessageBox.warning(self, "SpiceSim", "Enable at least one analysis.")
             return ""
-        netlist = export_netlist(self._canvas, "top_circuit", corner=self.corner_combo.currentText())
+        netlist = export_netlist(self._canvas, "top_circuit", corner=self.corner_combo.currentText(), for_simulation=True)
         lines = [netlist]
         lines.extend(self._param_lines())
         lines.extend(self._analysis_lines(analyses))
@@ -497,7 +497,9 @@ class ADEWindow(QMainWindow):
         lines = []
         for name, args in analyses:
             lower = name.lower()
-            if name == "Pnoise":
+            if lower == "dc":
+                lines.append(self._dc_analysis_line(args))
+            elif name == "Pnoise":
                 parts = args.split()
                 if len(parts) >= 4:
                     lines.append(f".noise V(out) {parts[0]} DEC {parts[3]} {parts[1]} {parts[2]}")
@@ -506,6 +508,16 @@ class ADEWindow(QMainWindow):
             else:
                 lines.append(f".{lower} {args}")
         return lines
+
+    def _dc_analysis_line(self, args):
+        parts = args.split()
+        source = parts[0] if parts else ""
+        if not source:
+            return ".op"
+        start = parts[1] if len(parts) > 1 else "0"
+        stop = parts[2] if len(parts) > 2 else start
+        step = parts[3] if len(parts) > 3 else "1"
+        return f".dc {source} {start} {stop} {step}"
 
     def _param_lines(self):
         lines = []
@@ -519,7 +531,14 @@ class ADEWindow(QMainWindow):
     def _output_lines(self, analyses):
         if not analyses:
             return []
-        first = analyses[0][0].lower()
+        first_name, first_args = analyses[0]
+        first = first_name.lower()
+        if first == "dc":
+            if first_args.split():
+                return [".save all", ".print dc all"]
+            return [".save all", ".print op all"]
+        if first == "op":
+            return [".save all", ".print op all"]
         outputs = []
         for row in range(self.outputs_table.rowCount()):
             chk = self.outputs_table.cellWidget(row, 3)
@@ -529,7 +548,7 @@ class ADEWindow(QMainWindow):
             if expr:
                 outputs.append(expr)
         if not outputs:
-            outputs = ["v(out)"]
+            return [".save all"]
         return [f".print {first} " + " ".join(outputs), ".probe " + " ".join(outputs)]
 
     def _stop_simulation(self):

@@ -16,12 +16,21 @@ def _export_value(value):
     return normalize_spice_value(text)
 
 
-def export_netlist(items_or_canvas=None, cellname=None, corner="tt"):
-    return NetlistExporter().export(items_or_canvas, cellname or "top_circuit", corner=corner)
+def export_netlist(items_or_canvas=None, cellname=None, corner="tt", for_simulation=False):
+    return NetlistExporter().export(
+        items_or_canvas,
+        cellname or "top_circuit",
+        corner=corner,
+        for_simulation=for_simulation,
+    )
 
 
 class NetlistExporter:
-    def export(self, canvas, cellname="top_circuit", corner="tt"):
+    def __init__(self, canvas=None):
+        self.canvas = canvas
+
+    def export(self, canvas=None, cellname="top_circuit", corner="tt", for_simulation=False):
+        canvas = canvas if canvas is not None else self.canvas
         cellname = cellname or "top_circuit"
         nets, components = self._extract(canvas)
         ports = self._ports(components, nets)
@@ -38,12 +47,14 @@ class NetlistExporter:
             elif any(comp.get("type", "") in ("nmos", "pmos") for comp in components.values()) and os.path.exists(MODEL_LIB):
                 lines.append(f".lib {MODEL_LIB} tt")
 
-        lines.append(f".subckt {cellname} {' '.join(ports)}".rstrip())
+        if not for_simulation:
+            lines.append(f".subckt {cellname} {' '.join(ports)}".rstrip())
         for name, comp in components.items():
             instance = self._instance_line(name, comp, nets)
             if instance:
                 lines.append(instance)
-        lines.append(f".ends {cellname}")
+        if not for_simulation:
+            lines.append(f".ends {cellname}")
         return "\n".join(lines)
 
     def _pdk_model_include(self, corner="tt"):

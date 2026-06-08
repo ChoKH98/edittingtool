@@ -33,6 +33,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from lib_manager_fs import (
+    LIBRARY_ROOT,
+    create_cell,
+    create_library,
+    delete_cell,
+    delete_library,
+    get_cell_meta,
+    get_library_meta,
+    get_views,
+    list_cells,
+    list_libraries,
+)
+
 
 DATA_PATH = os.path.expanduser("~/.eda_libraries.json")
 VIEW_NAMES = ("schematic", "layout", "symbol")
@@ -209,14 +222,28 @@ class LibraryManagerWindow(QMainWindow):
     def _load_data(self):
         if not os.path.exists(self._data_path):
             self._data = {"libraries": {}}
-            return
-        try:
-            with open(self._data_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._data = data if isinstance(data, dict) else {"libraries": {}}
-            self._data.setdefault("libraries", {})
-        except (OSError, json.JSONDecodeError):
-            self._data = {"libraries": {}}
+        else:
+            try:
+                with open(self._data_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._data = data if isinstance(data, dict) else {"libraries": {}}
+                self._data.setdefault("libraries", {})
+            except (OSError, json.JSONDecodeError):
+                self._data = {"libraries": {}}
+        self._load_disk_libraries()
+
+    def _load_disk_libraries(self):
+        libraries = self._data.setdefault("libraries", {})
+        for lib_name in list_libraries():
+            if lib_name in (ANALOG_LIB_NAME, IHP_LIB_NAME) or lib_name in libraries:
+                continue
+            meta = get_library_meta(lib_name)
+            cells = {}
+            for cell_name in list_cells(lib_name):
+                cell_meta = get_cell_meta(lib_name, cell_name)
+                views = get_views(lib_name, cell_name) or cell_meta.get("views", [])
+                cells[cell_name] = {"views": views}
+            libraries[lib_name] = {"cells": cells, "categories": {}, "meta": meta}
 
     def _save_data(self):
         self._data.get("libraries", {}).pop(ANALOG_LIB_NAME, None)
@@ -327,6 +354,7 @@ class LibraryManagerWindow(QMainWindow):
             QMessageBox.warning(self, "Library Exists", f"Library '{name}' already exists.")
             return
         libraries[name] = {"cells": {}, "categories": {}}
+        create_library(name, description="")
         self._save_data()
         self._populate_tree()
 
@@ -366,6 +394,7 @@ class LibraryManagerWindow(QMainWindow):
             QMessageBox.warning(self, "Cell Exists", f"Cell '{name}' already exists.")
             return
         cells[name] = {"views": views}
+        create_cell(lib_name, name)
         self._save_data()
         self._populate_tree()
 
@@ -376,15 +405,18 @@ class LibraryManagerWindow(QMainWindow):
         libraries = self._data.get("libraries", {})
         if lib and cat and cell:
             del libraries[lib]["categories"][cat]["cells"][cell]
+            delete_cell(lib, cell)
             label = f"Deleted cell {cell}"
         elif lib and cell:
             del libraries[lib].setdefault("cells", {})[cell]
+            delete_cell(lib, cell)
             label = f"Deleted cell {cell}"
         elif lib and cat:
             del libraries[lib]["categories"][cat]
             label = f"Deleted category {cat}"
         elif lib:
             del libraries[lib]
+            delete_library(lib)
             label = f"Deleted library {lib}"
         else:
             return
@@ -397,9 +429,13 @@ class LibraryManagerWindow(QMainWindow):
         if view == "schematic":
             from schematic.schematic_window import SchematicWindow
             win = SchematicWindow(cellname=cell, lib_data=cell_data)
+            if lib not in (ANALOG_LIB_NAME, IHP_LIB_NAME):
+                win.load_from_library(lib, cell)
         elif view == "layout":
             from main import MainWindow
             win = MainWindow()
+            if lib not in (ANALOG_LIB_NAME, IHP_LIB_NAME):
+                win.load_from_library(lib, cell)
         else:
             self.statusBar().showMessage(f"No editor registered for {view}", 3000)
             return

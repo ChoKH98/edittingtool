@@ -16,6 +16,8 @@ class SchematicWindow(QMainWindow):
         self.canvas = SchematicCanvas(self)
         self._canvas = self.canvas
         self.setCentralWidget(self.canvas)
+        self._current_lib = ""
+        self._current_cell = ""
         self._last_sim_stdout = ""
         self._last_waveform_viewer = None
         self._ade_window = None
@@ -137,7 +139,46 @@ class SchematicWindow(QMainWindow):
         self.cellname = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         self.setWindowTitle(f"Schematic Editor — {self.cellname}")
 
+    def save_to_library(self, lib_name: str, cell_name: str):
+        """Save current schematic to library folder."""
+        from lib_manager_fs import save_view
+
+        data = self._canvas.to_dict()
+        data["lib_name"] = lib_name
+        data["cell_name"] = cell_name
+        save_view(lib_name, cell_name, "schematic", data)
+        self._current_lib = lib_name
+        self._current_cell = cell_name
+        self.cellname = cell_name
+        self.setWindowTitle(f"Schematic — {lib_name}/{cell_name}")
+        self.statusBar().showMessage(
+            f"Saved to libraries/{lib_name}/{cell_name}/schematic/", 3000
+        )
+
+    def load_from_library(self, lib_name: str, cell_name: str):
+        """Load schematic from library folder."""
+        from lib_manager_fs import load_view
+
+        self._current_lib = lib_name
+        self._current_cell = cell_name
+        self.cellname = cell_name
+        data = load_view(lib_name, cell_name, "schematic")
+        if data:
+            self._canvas.load_dict(data)
+            self.setWindowTitle(f"Schematic — {lib_name}/{cell_name}")
+            self.statusBar().showMessage(
+                f"Loaded libraries/{lib_name}/{cell_name}/schematic/", 3000
+            )
+        else:
+            self.setWindowTitle(f"Schematic — {lib_name}/{cell_name}")
+            QMessageBox.information(
+                self, "Open", f"No schematic found for {lib_name}/{cell_name}"
+            )
+
     def _save(self):
+        if self._current_lib and self._current_cell:
+            self.save_to_library(self._current_lib, self._current_cell)
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Schematic", f"{self.cellname}.sch.json", "Schematic (*.sch.json);;JSON (*.json)"
         )
@@ -163,17 +204,23 @@ class SchematicWindow(QMainWindow):
             if not self.canvas.import_from_spice(path):
                 return
             self.cellname = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            self._current_lib = ""
+            self._current_cell = ""
             self.setWindowTitle(f"Schematic Editor — {self.cellname}")
             return
         with open(path, "r") as f:
             data = json.load(f)
         self.canvas.load_dict(data)
         self.cellname = path.rsplit("/", 1)[-1].replace(".sch.json", "")
+        self._current_lib = ""
+        self._current_cell = ""
         self.setWindowTitle(f"Schematic Editor — {self.cellname}")
         self.statusBar().showMessage(f"Loaded schematic: {path}", 3000)
 
     def _new(self):
         self.canvas.clear_schematic()
+        self._current_lib = ""
+        self._current_cell = ""
         self.statusBar().showMessage("New schematic", 2000)
 
     def _check_and_save(self):

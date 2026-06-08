@@ -47,6 +47,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('IHP SG13G2 Layout Editor')
         self.resize(1400, 900)
         self.current_file = None
+        self._current_lib = ""
+        self._current_cell = ""
         self._verification_gds_path = None
 
         self.layer_panel_widget = layer_panel.LayerPanel(self)
@@ -388,6 +390,8 @@ class MainWindow(QMainWindow):
         self.canvas.clear_layout()
         self.drc_results.clear()
         self.current_file = None
+        self._current_lib = ""
+        self._current_cell = ""
         self._verification_gds_path = None
         self._update_verification_title()
         self.statusBar().showMessage('New layout')
@@ -402,12 +406,17 @@ class MainWindow(QMainWindow):
             self.canvas.add_shapes(shapes)
             self.canvas.fit_view()
             self.current_file = path
+            self._current_lib = ""
+            self._current_cell = ""
             self._set_verification_gds(path)
             self.statusBar().showMessage(f'Loaded {len(shapes)} shapes from {path}')
         except Exception as exc:
             QMessageBox.critical(self, 'Open GDS failed', str(exc))
 
     def save_gds(self):
+        if self._current_lib and self._current_cell:
+            self.save_to_library(self._current_lib, self._current_cell)
+            return
         path, _ = QFileDialog.getSaveFileName(self, 'Save GDS', self.current_file or 'layout.gds', 'GDS files (*.gds);;All files (*)')
         if not path:
             return
@@ -418,6 +427,44 @@ class MainWindow(QMainWindow):
             self._set_verification_gds(path)
         except Exception as exc:
             QMessageBox.critical(self, 'Save GDS failed', str(exc))
+
+    def save_to_library(self, lib_name: str, cell_name: str):
+        """Save current layout to library folder."""
+        from lib_manager_fs import save_view
+
+        shapes = self.canvas.get_all_shapes() if hasattr(self.canvas, "get_all_shapes") else []
+        data = {"shapes": shapes, "lib_name": lib_name, "cell_name": cell_name}
+        save_view(lib_name, cell_name, "layout", data)
+        self._current_lib = lib_name
+        self._current_cell = cell_name
+        self.setWindowTitle(f"Layout Editor — {lib_name}/{cell_name}")
+        self.statusBar().showMessage(
+            f"Saved to libraries/{lib_name}/{cell_name}/layout/", 3000
+        )
+
+    def load_from_library(self, lib_name: str, cell_name: str):
+        """Load layout from library folder."""
+        from lib_manager_fs import load_view
+
+        self._current_lib = lib_name
+        self._current_cell = cell_name
+        data = load_view(lib_name, cell_name, "layout")
+        if data and "shapes" in data:
+            if hasattr(self.canvas, "load_shapes"):
+                self.canvas.load_shapes(data["shapes"])
+            else:
+                self.canvas.clear_layout()
+                self.canvas.add_shapes(data["shapes"])
+            self.canvas.fit_view()
+            self.setWindowTitle(f"Layout Editor — {lib_name}/{cell_name}")
+            self.statusBar().showMessage(
+                f"Loaded libraries/{lib_name}/{cell_name}/layout/", 3000
+            )
+        else:
+            self.setWindowTitle(f"Layout Editor — {lib_name}/{cell_name}")
+            QMessageBox.information(
+                self, "Open", f"No layout found for {lib_name}/{cell_name}"
+            )
 
     def load_pdk(self):
         from pdk_manager import PDK

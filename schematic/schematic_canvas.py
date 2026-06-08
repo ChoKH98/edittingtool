@@ -162,7 +162,9 @@ class ComponentItem(QGraphicsItemGroup):
                 draw()
             else:
                 self._draw_legacy()
+        self._draw_pin_markers()
         self._add_labels()
+        self.setTransformOriginPoint(self.boundingRect().center())
         if hasattr(self, "_schematic_data"):
             self._schematic_data.update({"name": self.comp_name, "type": self.sym_key, "props": self.props})
 
@@ -217,6 +219,22 @@ class ComponentItem(QGraphicsItemGroup):
 
     def _pins(self, **pins):
         self.pin_positions = {name: self._sp(x, y) for name, (x, y) in pins.items()}
+
+    def _draw_pin_markers(self):
+        pin_radius = 3
+        for pin_pos in self.pin_positions.values():
+            px = pin_pos.x() if hasattr(pin_pos, "x") else pin_pos[0]
+            py = pin_pos.y() if hasattr(pin_pos, "y") else pin_pos[1]
+            circle = QGraphicsEllipseItem(
+                px - pin_radius,
+                py - pin_radius,
+                pin_radius * 2,
+                pin_radius * 2,
+            )
+            circle.setPen(QPen(QColor("#89b4fa"), 1.5))
+            circle.setBrush(QBrush(QColor("#1e1e2e")))
+            circle.setZValue(10)
+            self.addToGroup(circle)
 
     def _draw_symbol_definition(self, sym):
         pen = self._symbol_pen()
@@ -1231,6 +1249,7 @@ class SchematicCanvas(QGraphicsView):
         self._junction_items = []
         self._net_manager = NetManager()
         self._snap_to_grid = True
+        self._clipboard = []
         self.undo_stack = QUndoStack(self)
         self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
         self._symbols = {}
@@ -1265,9 +1284,16 @@ class SchematicCanvas(QGraphicsView):
     def keyPressEvent(self, event):
         key = event.key()
         mods = event.modifiers()
+        if isinstance(self.focusWidget(), QLineEdit):
+            super().keyPressEvent(event)
+            return
         if key == Qt.Key_Escape:
             self._scene.clearSelection()
             self._cancel_mode()
+        elif mods == Qt.ControlModifier and key == Qt.Key_C:
+            self._copy_selected()
+        elif mods == Qt.ControlModifier and key == Qt.Key_V:
+            self._paste()
         elif mods == Qt.ControlModifier and key == Qt.Key_A:
             for item in self._scene.items():
                 if item.flags() & item.ItemIsSelectable:
@@ -1308,8 +1334,8 @@ class SchematicCanvas(QGraphicsView):
             self.mirror_selected()
         elif key == Qt.Key_M:
             self._status("Move: drag selected objects")
-        elif key == Qt.Key_R:
-            self.rotate_selected()
+        elif key == Qt.Key_R and not mods:
+            self._rotate_selected()
         elif key == Qt.Key_G:
             self._snap_to_grid = not self._snap_to_grid
             self._status(f"Snap grid: {'on' if self._snap_to_grid else 'off'}")
@@ -1372,7 +1398,7 @@ class SchematicCanvas(QGraphicsView):
                     if net:
                         first_net = net.split(", ", 1)[0]
                         self._status(f"Net: {net}  ({len(self._net_manager.get_pins_on_net(first_net))} connections)")
-                        self._highlight_net(first_net)
+                        self.highlight_net(first_net)
                         break
 
     def mouseMoveEvent(self, event):
@@ -1713,6 +1739,18 @@ class SchematicCanvas(QGraphicsView):
                 owner.rotate90()
         self._rebuild_junctions()
 
+    def _rotate_selected(self, angle: float = 90.0):
+        rotated = 0
+        for item in self._scene.selectedItems():
+            owner = self._owning_item(item)
+            if isinstance(owner, ComponentItem):
+                owner.setRotation((owner.rotation() + angle) % 360)
+                rotated += 1
+        if rotated:
+            self._scene.update()
+            self._rebuild_nets()
+            self._status(f"Rotated {rotated} component(s) by {angle}°")
+
     def mirror_selected(self):
         for item in self._scene.selectedItems():
             owner = self._owning_item(item)
@@ -1734,6 +1772,61 @@ class SchematicCanvas(QGraphicsView):
             elif isinstance(owner, BlockItem):
                 self._scene.addItem(BlockItem(owner.block_name, owner.pin_names, owner.local_rect, owner.pos() + QPointF(GRID, GRID)))
         self._rebuild_junctions()
+
+    def _copy_selected(self):
+        self._clipboard = []
+        seen = set()
+        for item in self._scene.selectedItems():
+            owner = self._owning_item(item)
+            if not isinstance(owner, ComponentItem) or id(owner) in seen:
+                continue
+            seen.add(id(owner))
+            self._clipboard.append({
+                "sym_key": owner.sym_key,
+                "comp_name": owner.comp_name,
+                "props": dict(owner.props),
+                "x": owner.pos().x(),
+                "y": owner.pos().y(),
+                "rotation": owner.rotation(),
+                "library": getattr(owner, "library", ""),
+            })
+        self._status(f"Copied {len(self._clipboard)} component(s)")
+
+    def _paste(self):
+        if not self._clipboard:
+            return
+        self._scene.clearSelection()
+        offset = 20
+        for data in self._clipboard:
+            item = ComponentItem(
+                data["sym_key"], self._symbols,
+                name=self._unique_name(data.get("comp_name", "X")),
+                props=dict(data.get("props", {})),
+            )
+            item.setPos(data.get("x", 0) + offset, data.get("y", 0) + offset)
+            item.setRotation(data.get("rotation", 0))
+            if hasattr(item, "library"):
+                item.library = data.get("library", "")
+            self._scene.addItem(item)
+            item.setSelected(True)
+        self._rebuild_junctions()
+        self._rebuild_nets()
+        self._status(f"Pasted {len(self._clipboard)} component(s)")
+
+    def _unique_name(self, base: str) -> str:
+        existing = {
+            getattr(item, "comp_name", "")
+            for item in self._scene.items()
+            if isinstance(item, ComponentItem)
+        }
+        if base not in existing:
+            return base
+        index = 1
+        while True:
+            candidate = f"{base}_{index}"
+            if candidate not in existing:
+                return candidate
+            index += 1
 
     def fit_all(self):
         rect = self._scene.itemsBoundingRect()

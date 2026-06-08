@@ -53,7 +53,7 @@ class SchematicWindow(QMainWindow):
         self._add_tool_action(tb, "Zoom Out", "Zoom Out (Shift+Z)", lambda: self.canvas.zoom_at_viewport_pos(self.canvas.viewport().rect().center(), 1 / 1.2))
         tb.addSeparator()
 
-        self._add_tool_action(tb, "SpiceSim", "Launch SpiceSim (Ctrl+Shift+A)", self._open_ade)
+        self._add_tool_action(tb, "SpiceSim", "Launch SpiceSim (F5)", self._open_ade)
 
     def _add_tool_action(self, toolbar, text, tooltip, slot):
         act = QAction(text, self)

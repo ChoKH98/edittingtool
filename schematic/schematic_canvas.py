@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsLineItem, QGraphicsEllipseItem,
-    QGraphicsTextItem, QGraphicsItemGroup, QGraphicsRectItem, QGraphicsPolygonItem,
-    QGraphicsPathItem, QGraphicsItem,
+    QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItemGroup,
+    QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsPathItem, QGraphicsItem,
     QMenu, QInputDialog, QDialog, QFormLayout, QDoubleSpinBox, QSpinBox,
     QLineEdit, QDialogButtonBox, QComboBox, QUndoCommand, QUndoStack,
     QVBoxLayout, QLabel, QTabWidget, QTextEdit, QWidget, QHBoxLayout,
@@ -93,17 +93,25 @@ class DeleteCommand(QUndoCommand):
         self.items = list(items)
 
     def redo(self):
+        parent = self.scene.parent()
         for item in self.items:
             if item.scene() is self.scene:
+                if isinstance(item, ComponentItem) and hasattr(parent, "_detach_component_wires"):
+                    parent._detach_component_wires(item)
                 self.scene.removeItem(item)
 
     def undo(self):
         for item in self.items:
             if item.scene() is None:
                 self.scene.addItem(item)
+        parent = self.scene.parent()
+        if hasattr(parent, "_reattach_all_wires"):
+            parent._reattach_all_wires()
 
 
 class ComponentItem(QGraphicsItemGroup):
+    LABEL_TYPES = {"port", "port_in", "port_out", "net_label", "label", "vdd", "vss", "gnd"}
+
     def __init__(self, sym_key, symbols=None, name="", props=None, parent=None):
         if isinstance(sym_key, (int, float)) and isinstance(symbols, (int, float)):
             x, y, sym_key, props = sym_key, symbols, name, props
@@ -165,6 +173,7 @@ class ComponentItem(QGraphicsItemGroup):
         self._draw_pin_markers()
         self._add_labels()
         self.setTransformOriginPoint(self.boundingRect().center())
+        self._update_label_rotation()
         if hasattr(self, "_schematic_data"):
             self._schematic_data.update({"name": self.comp_name, "type": self.sym_key, "props": self.props})
 
@@ -394,6 +403,13 @@ class ComponentItem(QGraphicsItemGroup):
             return str(self.props.get("dc", "1m"))
         return str(self.props.get("net", ""))
 
+    def _label_display_text(self):
+        if self.sym_key in ("port", "port_in", "port_out"):
+            return str(self.props.get("name") or self.props.get("net") or self.comp_name)
+        if self.sym_key in ("vdd", "vss", "gnd", "net_label", "label"):
+            return str(self.props.get("net") or self.props.get("name") or self.comp_name)
+        return str(self.comp_name)
+
     def _text(self, text, x, y, color, size=8, bold=False):
         item = QGraphicsTextItem(str(text))
         item.setDefaultTextColor(QColor(color))
@@ -408,13 +424,58 @@ class ComponentItem(QGraphicsItemGroup):
         sym = self._symbols.get(self.sym_key, {})
         nx, ny = sym.get("name_offset", (0, -3))
         vx, vy = sym.get("value_offset", (0, 2.2))
-        self._text(self.comp_name, nx, ny, "#a6e3a1", 8)
+        self._value_label = None
+        if self.sym_key in self.LABEL_TYPES:
+            self._name_label = self._text(self._label_display_text(), nx, ny, "#a6e3a1", 8)
+            return
+        self._name_label = self._text(self.comp_name, nx, ny, "#a6e3a1", 8)
         value = self._value_text()
         if value:
-            self._text(value, vx, vy, "#fab387", 8)
+            self._value_label = self._text(value, vx, vy, "#fab387", 8)
+
+    def _refresh_display(self):
+        """Update text labels without rebuilding the symbol or changing connections."""
+        if hasattr(self, "_schematic_data"):
+            self._schematic_data.update({"name": self.comp_name, "type": self.sym_key, "props": self.props})
+
+        name_label = getattr(self, "_name_label", None)
+        if name_label is not None:
+            name_label.setPlainText(self._label_display_text() if self.sym_key in self.LABEL_TYPES else str(self.comp_name))
+
+        if self.sym_key in self.LABEL_TYPES:
+            value_label = getattr(self, "_value_label", None)
+            if value_label is not None:
+                value_label.setVisible(False)
+            self.update()
+            return
+
+        value = self._value_text()
+        value_label = getattr(self, "_value_label", None)
+        if value_label is not None:
+            value_label.setPlainText(str(value))
+            value_label.setVisible(bool(value))
+        elif value:
+            sym = self._symbols.get(self.sym_key, {})
+            vx, vy = sym.get("value_offset", (0, 2.2))
+            self._value_label = self._text(value, vx, vy, "#fab387", 8)
+            self._value_label.setRotation(-self.rotation())
+
+        self.update()
+
+    def _label_items(self):
+        return [
+            child for child in self.childItems()
+            if isinstance(child, (QGraphicsTextItem, QGraphicsSimpleTextItem))
+        ]
+
+    def _update_label_rotation(self):
+        """Keep text labels readable while their local positions rotate with the symbol."""
+        angle = self.rotation()
+        for label in self._label_items():
+            label.setRotation(-angle)
 
     def rotate90(self):
-        self.setRotation(self.rotation() + 90)
+        self.setRotation((self.rotation() + 90) % 360)
 
     def mirror_horizontal(self):
         self.setScale(-self.scale() if self.scale() else -1)
@@ -422,7 +483,13 @@ class ComponentItem(QGraphicsItemGroup):
     def itemChange(self, change, value):
         if change == self.ItemPositionChange:
             return snap_point(value)
+        if change == self.ItemRotationHasChanged:
+            self._update_label_rotation()
         if change == self.ItemPositionHasChanged and self.scene():
+            views = self.scene().views()
+            canvas = views[0] if views else self.scene().parent()
+            if hasattr(canvas, "_update_rubber_wires"):
+                canvas._update_rubber_wires(self)
             parent = self.scene().parent()
             if hasattr(parent, "_rebuild_junctions"):
                 parent._rebuild_junctions()
@@ -942,10 +1009,16 @@ class ComponentPropertiesDialog(QDialog):
             self.spice_preview.setPlainText(self._spice_line(self._collect_props()))
 
     def apply(self):
-        self.component.comp_name = self.name_edit.text().strip() or self.component.comp_name
+        new_name = self.name_edit.text().strip()
+        new_props = self._collect_props()
+        if new_name:
+            self.component.comp_name = new_name
         self.component.props.clear()
-        self.component.props.update(self._collect_props())
-        self.component._build()
+        self.component.props.update(new_props)
+        if hasattr(self.component, "_refresh_display"):
+            self.component._refresh_display()
+        else:
+            self.component.update()
 
     def accept(self):
         self.apply()
@@ -956,6 +1029,8 @@ class WireItem(QGraphicsLineItem):
     def __init__(self, x1, y1, x2, y2, net_name=""):
         super().__init__(x1, y1, x2, y2)
         self.net_name = net_name or ""
+        self._pin_start = None
+        self._pin_end = None
         self._net_label = QGraphicsTextItem(self)
         self._net_label.setDefaultTextColor(QColor("#a6e3a1"))
         self._net_label.setFont(QFont("Monospace", 8))
@@ -1434,6 +1509,9 @@ class SchematicCanvas(QGraphicsView):
             new_line = QLineF(self._wire_drag_item.line())
             if not self._same_line(old_line, new_line):
                 self.undo_stack.push(MoveWireEndpointCommand(self._wire_drag_item, old_line, new_line))
+            self._wire_drag_item._pin_start = None
+            self._wire_drag_item._pin_end = None
+            self._attach_wire_to_pins(self._wire_drag_item)
 
             self._clear_wire_drag()
             self._mode = "select"
@@ -1506,6 +1584,8 @@ class SchematicCanvas(QGraphicsView):
                 wires.append(WireItem(x1, y1, x2, y2, net_name))
         if wires:
             self.undo_stack.push(AddWireCommand(self._scene, *wires))
+            for wire in wires:
+                self._attach_wire_to_pins(wire)
             self._rebuild_junctions()
 
     def _route_preview_segments(self, end_pos):
@@ -1713,6 +1793,7 @@ class SchematicCanvas(QGraphicsView):
 
     def _on_undo_index_changed(self, _index):
         try:
+            self._reattach_all_wires()
             self._rebuild_junctions()
         except RuntimeError:
             pass
@@ -1729,6 +1810,9 @@ class SchematicCanvas(QGraphicsView):
                 seen.add(key)
                 items.append(item)
         if items:
+            for item in items:
+                if isinstance(item, ComponentItem):
+                    self._detach_component_wires(item)
             self.undo_stack.push(DeleteCommand(self._scene, items))
             self._rebuild_junctions()
 
@@ -1931,6 +2015,75 @@ class SchematicCanvas(QGraphicsView):
         self._wire_drag_end = None
         self._wire_drag_fixed = None
         self._wire_drag_old_line = None
+
+    def _attach_wire_to_pins(self, wire):
+        """
+        Check if wire endpoints are near component pins and record the connection.
+        """
+        if not hasattr(wire, "line"):
+            return
+        tol = 8.0
+        line = wire.line()
+        p1_scene = wire.mapToScene(line.p1())
+        p2_scene = wire.mapToScene(line.p2())
+
+        for item in self._scene.items():
+            if not isinstance(item, ComponentItem):
+                continue
+            for pin_name, pin_local in (item.pin_positions or {}).items():
+                pin_scene = item.mapToScene(pin_local)
+                if (p1_scene - pin_scene).manhattanLength() < tol:
+                    wire._pin_start = (item, pin_name)
+                if (p2_scene - pin_scene).manhattanLength() < tol:
+                    wire._pin_end = (item, pin_name)
+
+    def _reattach_all_wires(self):
+        """After loading or undo/redo, re-scan all wires and attach them to nearby pins."""
+        for item in self._scene.items():
+            if isinstance(item, WireItem):
+                item._pin_start = None
+                item._pin_end = None
+                self._attach_wire_to_pins(item)
+
+    def _detach_component_wires(self, component):
+        """Remove wire pin references pointing to the deleted component."""
+        for item in self._scene.items():
+            if isinstance(item, WireItem):
+                if getattr(item, "_pin_start", None) and item._pin_start[0] is component:
+                    item._pin_start = None
+                if getattr(item, "_pin_end", None) and item._pin_end[0] is component:
+                    item._pin_end = None
+
+    def _update_rubber_wires(self, moved_component):
+        """
+        Update all wire endpoints pinned to moved_component during component drag.
+        """
+        pin_positions = getattr(moved_component, "pin_positions", {}) or {}
+        for item in self._scene.items():
+            if not isinstance(item, WireItem) or not hasattr(item, "line"):
+                continue
+
+            changed = False
+            line = item.line()
+            p1_scene = item.mapToScene(line.p1())
+            p2_scene = item.mapToScene(line.p2())
+
+            if getattr(item, "_pin_start", None) and item._pin_start[0] is moved_component:
+                pin_local = pin_positions.get(item._pin_start[1])
+                if pin_local is not None:
+                    p1_scene = moved_component.mapToScene(pin_local)
+                    changed = True
+
+            if getattr(item, "_pin_end", None) and item._pin_end[0] is moved_component:
+                pin_local = pin_positions.get(item._pin_end[1])
+                if pin_local is not None:
+                    p2_scene = moved_component.mapToScene(pin_local)
+                    changed = True
+
+            if changed:
+                p1_local = item.mapFromScene(p1_scene)
+                p2_local = item.mapFromScene(p2_scene)
+                item.setLine(p1_local.x(), p1_local.y(), p2_local.x(), p2_local.y())
 
     def _cancel_mode(self):
         self._scene.clearSelection()
@@ -2272,9 +2425,13 @@ class SchematicCanvas(QGraphicsView):
             return
         mid = snap_point(QPointF(p2.x(), p1.y()))
         if QLineF(p1, mid).length() > 0.001:
-            self._scene.addItem(WireItem(p1.x(), p1.y(), mid.x(), mid.y(), net_name=net_name))
+            wire = WireItem(p1.x(), p1.y(), mid.x(), mid.y(), net_name=net_name)
+            self._scene.addItem(wire)
+            self._attach_wire_to_pins(wire)
         if QLineF(mid, p2).length() > 0.001:
-            self._scene.addItem(WireItem(mid.x(), mid.y(), p2.x(), p2.y(), net_name=net_name))
+            wire = WireItem(mid.x(), mid.y(), p2.x(), p2.y(), net_name=net_name)
+            self._scene.addItem(wire)
+            self._attach_wire_to_pins(wire)
 
     def to_dict(self):
         self._rebuild_nets()
@@ -2327,6 +2484,7 @@ class SchematicCanvas(QGraphicsView):
             self._scene.addItem(BlockItem.from_dict(block_data))
         if "nets" in data:
             self._net_manager.from_dict(data["nets"])
+        self._reattach_all_wires()
         self.undo_stack.clear()
         self._rebuild_junctions()
 
